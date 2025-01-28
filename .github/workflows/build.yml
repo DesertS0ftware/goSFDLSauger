@@ -39,3 +39,8 @@ jobs:
         with:
           name: goSFDLLoader_Windows
           path: dist/goSFDLLoader.exe
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*
