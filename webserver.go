@@ -63,7 +63,7 @@ type File struct {
 	Size  string
 }
 
-type ServerResponse struct {
+type StatusMessage struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 }
@@ -202,27 +202,27 @@ func (s *Server) Start() {
 	http.HandleFunc("/start-stop-status", func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err != nil || !sessions[cookie.Value] {
-			sendServerResponseJson("error", "unauthorized", w)
+			sendStatusMessage("error", "unauthorized", w)
 			return
 		}
 		if isDownloadRunning {
-			sendServerResponseJson("isDownloadRunning", "true", w)
+			sendStatusMessage("isDownloadRunning", "true", w)
 		} else {
-			sendServerResponseJson("isDownloadRunning", "false", w)
+			sendStatusMessage("isDownloadRunning", "false", w)
 		}
 	})
 	http.HandleFunc("/stop-downloads", func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err != nil || !sessions[cookie.Value] {
-			sendServerResponseJson("error", "unauthorized", w)
+			sendStatusMessage("error", "unauthorized", w)
 			return
 		}
 		if !isDownloadRunning {
-			sendServerResponseJson("error", "there are no aktive downloads to stop!", w)
+			sendStatusMessage("error", "there are no aktive downloads to stop!", w)
 			AddLoaderLog("error: there are no aktive downloads to stop!")
 			return
 		}
-		sendServerResponseJson("success", "stopping all downloads", w)
+		sendStatusMessage("success", "stopping all downloads", w)
 		AddLoaderLog("Stopping all downloads!")
 		if UseMQTT {
 			go SendMQTTMsg("Stopping all downloads!", "command", "stop")
@@ -232,15 +232,15 @@ func (s *Server) Start() {
 	http.HandleFunc("/start-downloads", func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err != nil || !sessions[cookie.Value] {
-			sendServerResponseJson("error", "unauthorized", w)
+			sendStatusMessage("error", "unauthorized", w)
 			return
 		}
 		if isDownloadRunning {
-			sendServerResponseJson("error", "there is an aktive download running!", w)
+			sendStatusMessage("error", "there is an aktive download running!", w)
 			AddLoaderLog("error: there is an aktive download running!")
 			return
 		}
-		sendServerResponseJson("success", "starting all downloads", w)
+		sendStatusMessage("success", "starting all downloads", w)
 		AddLoaderLog("Starting all downloads!")
 		if UseMQTT {
 			SendMQTTMsg("Starting all downloads!", "command", "start")
@@ -299,21 +299,27 @@ func (s *Server) Start() {
 	}
 }
 
-func sendServerResponseJson(status, message string, w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-	response := ServerResponse{
+func sendStatusMessage(status, message string, w http.ResponseWriter) {
+	sendJSONResponse(StatusMessage{
 		Status:  status,
 		Message: message,
-	}
+	}, w)
+}
+
+func sendJSONResponse(payload any, w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(payload)
 }
 
 func contentHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
-	if err != nil || !sessions[cookie.Value] {
+
+	// Detect if the request points to our assets
+	isAsset := strings.HasPrefix(r.URL.Path, "/assets/")
+
+	// Redirect to login if no valid session is detected and the request is not for a file in the asset folder
+	if !isAsset && (err != nil || !sessions[cookie.Value]) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -419,7 +425,7 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 func eventsHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
@@ -474,7 +480,7 @@ func eventsHandler(w http.ResponseWriter, r *http.Request) {
 func logsHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
@@ -491,7 +497,7 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
@@ -526,18 +532,18 @@ func changePasswordHandler(w http.ResponseWriter, r *http.Request) {
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
 	if r.Method != http.MethodPost {
-		sendServerResponseJson("error", "invalid request method", w)
+		sendStatusMessage("error", "invalid request method", w)
 		return
 	}
 
 	err = r.ParseMultipartForm(10 << 20) // max 10 MB
 	if err != nil {
-		sendServerResponseJson("error", "error parsing upload form", w)
+		sendStatusMessage("error", "error parsing upload form", w)
 		return
 	}
 
@@ -545,25 +551,25 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	for _, fileHeader := range files {
 		file, err := fileHeader.Open()
 		if err != nil {
-			sendServerResponseJson("error", "error opening file", w)
+			sendStatusMessage("error", "error opening file", w)
 			return
 		}
 		defer file.Close()
 
 		if err := os.MkdirAll(filepath.Join(UserDownloadDir, "/sfdl_files"), os.ModePerm); err != nil {
-			sendServerResponseJson("error", "error creating directory for sfdl files", w)
+			sendStatusMessage("error", "error creating directory for sfdl files", w)
 			return
 		}
 
 		dst, err := os.Create(filepath.Join(UserDownloadDir, "/sfdl_files") + "/" + fileHeader.Filename)
 		if err != nil {
-			sendServerResponseJson("error", "error creating sfdl file", w)
+			sendStatusMessage("error", "error creating sfdl file", w)
 			return
 		}
 		defer dst.Close()
 
 		if _, err := io.Copy(dst, file); err != nil {
-			sendServerResponseJson("error", "error saving sfdl data", w)
+			sendStatusMessage("error", "error saving sfdl data", w)
 			return
 		}
 
@@ -602,6 +608,7 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 	if webDlFile != "" {
 		filePath := baseDir + webDlFile
 		downloadHandler(w, r, filePath, filepath.Base(webDlFile))
+		return
 	}
 
 	files, err := listFiles(baseDir, relativePath)
@@ -618,6 +625,11 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 			Path:  relativePath + "/" + f.Name,
 			Size:  FormatBytes(uint64(getFileSize(RemoveDuplicateSlashes(baseDir + "/" + relativePath + "/" + f.Name)))),
 		})
+	}
+
+	if r.URL.Query().Get("json") != "" {
+		sendJSONResponse(fileList, w)
+		return
 	}
 
 	tmplContent, err := content.ReadFile("www/filetree.html")
@@ -688,7 +700,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
@@ -696,53 +708,53 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	path = DestinationDownloadPath + path
 
 	if path == "" {
-		sendServerResponseJson("error", "a valid path is required", w)
+		sendStatusMessage("error", "a valid path is required", w)
 		return
 	}
 
 	err = deleteFileOrDir(path)
 	if err != nil {
-		sendServerResponseJson("error", fmt.Sprintf("Error deleting file: %v", err), w)
+		sendStatusMessage("error", fmt.Sprintf("Error deleting file: %v", err), w)
 		return
 	}
 
-	sendServerResponseJson("success", fmt.Sprintf("%s deleted successfully!", path), w)
+	sendStatusMessage("success", fmt.Sprintf("%s deleted successfully!", path), w)
 }
 
 func sendMQTTHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
 	if !UseMQTT {
-		sendServerResponseJson("error", "MQTT not available, no broker was set!", w)
+		sendStatusMessage("error", "MQTT not available, no broker was set!", w)
 		return
 	}
 
 	message := r.URL.Query().Get("mqttmsg")
 
 	if message == "" {
-		sendServerResponseJson("error", "a massage (empty) is required", w)
+		sendStatusMessage("error", "a massage (empty) is required", w)
 		return
 	}
 
 	msgerr := SendMQTTMsg(message)
 	if msgerr != nil {
-		sendServerResponseJson("error", "error sending MQTT message: "+message+" | "+fmt.Sprintf("error: %s", msgerr), w)
+		sendStatusMessage("error", "error sending MQTT message: "+message+" | "+fmt.Sprintf("error: %s", msgerr), w)
 		return
 	}
 
-	sendServerResponseJson("success", "MQTT broker got your message: "+message, w)
+	sendStatusMessage("success", "MQTT broker got your message: "+message, w)
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request, filePath, fileName string) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	cookie, err := r.Cookie("session")
 	if err != nil || !sessions[cookie.Value] {
-		sendServerResponseJson("error", "unauthorized", w)
+		sendStatusMessage("error", "unauthorized", w)
 		return
 	}
 
